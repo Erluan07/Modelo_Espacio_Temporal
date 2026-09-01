@@ -1,0 +1,45 @@
+# Credenciales -- NUNCA subir esto
+config/config.py
+*.json
+!config/*.example.json
+.env
+.netrc
+*credencial*
+*credential*
+*service_account*
+*.pem
+*.key
+
+# Datos y resultados (pesados, no van en el repo de código)
+data/
+*.csv
+*.parquet
+*.tif
+*.tiff
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.rds
+*.gdb/
+
+# Logs de corridas
+log_*.txt
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# Sistema
+.DS_Store
+Thumbs.db
