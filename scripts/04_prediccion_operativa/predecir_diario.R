@@ -76,11 +76,19 @@ zt$geologia_f <- factor(zt$geologia, levels = levels(modelo$model$geologia_f))
 zt$cobertura_f <- factor(zt$cobertura, levels = levels(modelo$model$cobertura_f))
 
 construir_ventana <- function(vec_ladera, fecha) {
+  ## OJO: deja NA donde falte una media hora en el buffer -- NO se rellena
+  ## con 0. Rellenar con 0 disfrazaría un hueco de datos como "no llovió",
+  ## y el modelo es MUY sensible a la forma de la curva cerca de "hoy" (ver
+  ## LIMITACIONES.md #2) -- justo la zona donde Early/Late tienen más
+  ## probabilidad de tener huecos por latencia. cumsum() propaga el NA
+  ## hacia adelante, así que basta un hueco para invalidar toda la fila
+  ## (mismo criterio ESTRICTO que 02_construccion_muestra/03_construir_ventanas_imerg.py
+  ## usa en el entrenamiento -- entrenamiento y producción deben tratar los
+  ## huecos igual, si no las predicciones no son comparables con el AUC
+  ## reportado).
   fin <- as.POSIXct(paste(fecha, "23:30:00"), tz = "UTC")
   pasos <- seq(fin - 30 * 24 * 3600 + 1800, fin, by = "30 min")
-  vals <- vec_ladera[as.character(pasos)]
-  vals[is.na(vals)] <- 0
-  as.numeric(vals)
+  as.numeric(vec_ladera[as.character(pasos)])
 }
 
 ## --- 4. Construir la ventana acumulada de 30d, UNA vez por ladera, y predecir ---
@@ -88,22 +96,29 @@ cat("Construyendo ventanas de 30 días y prediciendo...\n")
 ladera_ids <- unique(zt$ID_slope)
 curvas <- vector("list", length(ladera_ids))
 names(curvas) <- as.character(ladera_ids)
-laderas_incompletas <- character(0)
+laderas_sin_serie <- character(0)
+laderas_con_hueco <- character(0)
 
 for (idv in ladera_ids) {
   idc <- as.character(idv)
   vec_ladera <- if (exists(idc, envir = series_por_ladera)) get(idc, envir = series_por_ladera) else NULL
   if (is.null(vec_ladera)) {
-    laderas_incompletas <- c(laderas_incompletas, idc)
+    laderas_sin_serie <- c(laderas_sin_serie, idc)
     curvas[[idc]] <- rep(NA_real_, PASOS)
     next
   }
   media_hora <- construir_ventana(vec_ladera, FECHA)
+  if (anyNA(media_hora)) laderas_con_hueco <- c(laderas_con_hueco, idc)
   curvas[[idc]] <- cumsum(media_hora)
 }
-if (length(laderas_incompletas) > 0) {
-  cat("  AVISO:", length(laderas_incompletas), "laderas sin datos de lluvia (buffer incompleto), "
+if (length(laderas_sin_serie) > 0) {
+  cat("  AVISO:", length(laderas_sin_serie), "laderas sin ninguna serie de lluvia en el buffer, "
       , "se omiten de la prediccion de hoy.\n")
+}
+if (length(laderas_con_hueco) > 0) {
+  cat("  AVISO:", length(laderas_con_hueco), "laderas con al menos una media hora faltante ",
+      "en la ventana de 30 dias (buffer incompleto), se omiten de la prediccion de hoy ",
+      "(mismo criterio estricto que en entrenamiento -- no se rellena con 0).\n", sep = "")
 }
 
 mat_precip <- do.call(rbind, curvas[as.character(zt$ID_slope)])

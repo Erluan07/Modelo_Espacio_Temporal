@@ -23,11 +23,13 @@
 Tarea programada (cron en Linux, Task Scheduler en Windows) que corra, en
 este orden, **todos los días**:
 
-1. Descargar la lluvia del día (`01_descarga_lluvia/descargar_imerg_nasa_directo.py`).
-2. Actualizar el buffer rodante de 30 días (descartar el día más antiguo,
-   agregar el nuevo).
-3. Correr `04_prediccion_operativa/predecir_diario.R`.
-4. Publicar el resultado (subir el CSV/mapa a donde lo consuma la página).
+1. Descargar la lluvia del día y podar el buffer en un solo paso:
+   `01_descarga_lluvia/descargar_imerg_nasa_directo.py ... --retener-dias 31`
+   (el flag `--retener-dias` borra automáticamente los parquet diarios más
+   viejos que 31 días respecto a la fecha corrida -- sin esto el buffer
+   crece indefinidamente).
+2. Correr `04_prediccion_operativa/predecir_diario.R`.
+3. Publicar el resultado (subir el CSV/mapa a donde lo consuma la página).
 
 **¿A qué hora?** Depende de la corrida de IMERG que usen:
 - **Early** (~4h de latencia): se puede correr temprano, ej. 4-6am, para
@@ -73,8 +75,13 @@ diario para un modelo que predice por ladera, no por píxel de imagen.
   no dejar el endpoint de predicciones completamente abierto sin control.
 
 ## 7. Monitoreo
-- Logs de cada corrida diaria (ya los generan los scripts, ver carpeta de
-  salida configurada en cada uno).
+- Logs de cada corrida diaria (todos los scripts de este repo generan un
+  archivo de log en su carpeta de salida, incluida la descarga de lluvia:
+  `descargar_imerg_nasa_directo.py` escribe `log_descarga_AAAAMMDD_HHMMSS.txt`
+  en el mismo directorio del buffer).
 - Alerta (email/Slack/lo que usen) si el pipeline falla — en particular si
   la descarga de lluvia no responde (Earth Engine/NASA caídos, o la cuenta
-  de servicio expiró) o si faltan demasiadas laderas en el buffer del día.
+  de servicio expiró) o si faltan demasiadas laderas en el buffer del día
+  (`predecir_diario.R` reporta cuántas laderas quedaron sin serie o con
+  huecos en su log -- revisar ese conteo, no solo si el script terminó sin
+  error).

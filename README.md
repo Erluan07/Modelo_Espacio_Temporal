@@ -23,8 +23,11 @@ de la foto histórica más cercana, no la fecha real del evento (ver
 ```
 scripts/
   01_descarga_lluvia/        Descarga de IMERG (histórica vía Earth Engine,
-                              y en tiempo real vía NASA GES DISC directo)
+                              y en tiempo real vía NASA GES DISC directo) --
+                              AMBOS scripts producen la misma salida
+                              (ID_slope, time, precip_mm), intercambiable.
   02_construccion_muestra/   Presencia/ausencia por píxel + ventanas de 30d
+                              + terreno por ladera (ver orden abajo)
   03_ajuste_modelo/          Ajuste del FGAM (R, refund::pfr)
   04_prediccion_operativa/   Script de predicción DIARIA (el que va en el cron)
   05_diagnostico/            Prueba de sensibilidad del término de lluvia
@@ -36,27 +39,66 @@ REQUERIMIENTOS_TECNICOS.md   Qué se necesita para desplegar esto en producción
 LIMITACIONES.md              Lo que hay que saber antes de confiar en el modelo
 ```
 
+## Prerrequisito externo (leer antes de empezar)
+
+`02_construir_muestra_base.py` necesita una tabla de presencia/ausencia por
+píxel **ya construida** (`BASE_PARQUET` en ese script) con columnas
+`row_px, col_px, x_m, y_m, ID_slope, Zona, fecha, presencia, slope, aspect,
+geologia, cobertura, doy`. Esa tabla es un pipeline aparte (rasterización de
+presencias del inventario + generación de ausencias aleatorias con control
+de sesgo espacial) que **no forma parte de este repo** — si su equipo no la
+tiene todavía, hay que construirla primero. Sin ella, `02_construir_muestra_base.py`
+falla al arrancar.
+
 ## Flujo de trabajo (de cero a predicción)
 
-1. **Descargar lluvia histórica** (`01_descarga_lluvia/descargar_imerg_gee_historico.py`)
+**Entrenamiento / construcción del modelo** (una vez, y cada vez que se
+reentrene con inventario nuevo):
+
+1. Descargar lluvia histórica: `01_descarga_lluvia/descargar_imerg_gee_historico.py`
    — cubre el período de entrenamiento.
-2. **Construir la muestra** (`02_construccion_muestra/`, en orden 01→02→03)
-   — presencias Planet + terreno + ventanas de 30 días acumuladas.
-3. **Ajustar el modelo** (`03_ajuste_modelo/ajustar_modelo.R`) — guarda
+2. Construir la muestra, en `02_construccion_muestra/`:
+   - `01_asignar_fuente_inventario.py` es **opcional** — una herramienta de
+     conteo/verificación por zona, no genera un archivo que otro script lea.
+   - `02_construir_muestra_base.py` — presencias Planet + terreno (requiere
+     el prerrequisito externo de arriba).
+   - `03_construir_ventanas_imerg.py` — arma las ventanas acumuladas de 30
+     días a partir de la lluvia descargada en el paso 1.
+   - `04_extraer_terreno_por_ladera.py` — deriva `terreno_por_ladera.csv`
+     (un valor de terreno por `ID_slope`) a partir de la muestra del paso
+     anterior; es el insumo de terreno que usa la predicción diaria en
+     producción.
+3. Ajustar el modelo: `03_ajuste_modelo/ajustar_modelo.R` — guarda
    `modelo_espaciotemporal.rds` y las métricas de validación (AUC por
    partición aleatoria/espacial/temporal).
-4. **Producción diaria**: mantener el buffer de lluvia actualizado
-   (`01_descarga_lluvia/descargar_imerg_nasa_directo.py`, corrida Early o
+
+**Producción diaria** (automatizado, ver `REQUERIMIENTOS_TECNICOS.md`):
+
+4. Mantener el buffer de lluvia actualizado con
+   `01_descarga_lluvia/descargar_imerg_nasa_directo.py` (corrida Early o
    Late — **leer la nota sobre esto en el propio script y en
-   LIMITACIONES.md**) y correr `04_prediccion_operativa/predecir_diario.R`
-   todos los días (ver `REQUERIMIENTOS_TECNICOS.md` para la automatización).
+   `LIMITACIONES.md`**; el script incluye `--retener-dias` para podar el
+   buffer automáticamente).
+5. Correr `04_prediccion_operativa/predecir_diario.R` todos los días.
+
+## Diccionario de datos de entrada
+
+- **Shapefile de laderas** (`SLOPES` en varios scripts): debe tener una
+  columna `ID_slope` (entero, identificador único de cada ladera) y `Zona`
+  (texto, agrupación geográfica usada para la validación espacial).
+- **Shapefile(s) de inventario** (`INV_1`/`INV_2`): columnas `Proceso`
+  (texto, se filtra por contener "movimiento en masa"), `Reporte` (fecha del
+  evento, formato `dd/mm/yyyy`), `Fuente` (texto, se filtra a
+  Planetscope/Planet Scope), y opcionalmente `Sin_dia` (si no está vacío,
+  la fecha se considera incierta y se descarta esa fila).
+- **Rásters de terreno** (`RASTERS`/`RASTER_GEOLOGIA`): un valor numérico
+  por celda. `aspect == -1` es la convención estándar para "terreno plano /
+  sin orientación definida" (no es un rumbo real) — todos los scripts que
+  usan aspecto lo separan en un indicador binario `aspect_flat_f` antes de
+  aplicar el spline circular, para no tratarlo como si apuntara al norte.
 
 ## Antes de usar esto operativamente
 
 Este modelo tiene limitaciones conocidas y documentadas honestamente en
-`LIMITACIONES.md` — en particular, un comportamiento contraintuitivo
-confirmado (la probabilidad puede bajar después de una tormenta real,
-dependiendo de la forma/momento de la lluvia dentro de la ventana de 30
-días) y el hecho de que nunca se probó con datos IMERG Early/Late (los
-únicos disponibles en tiempo real). **Leer ese documento antes de tomar
-decisiones operativas con las predicciones de este modelo.**
+`LIMITACIONES.md`. Leerlo antes de tomar decisiones operativas con las
+predicciones de este modelo.

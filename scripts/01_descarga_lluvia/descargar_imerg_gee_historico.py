@@ -3,8 +3,10 @@ Descarga la serie IMERG V07 media-horaria (Google Earth Engine, corrida
 FINAL) para todas las laderas del área de estudio, en un rango de fechas
 dado. Uso principal: construir/actualizar el histórico completo (para
 reentrenar el modelo) — NO es el script para la actualización diaria en
-producción (ver `actualizar_buffer_diario.py`), porque la corrida Final de
-IMERG tiene ~3.5 meses de rezago y solo está disponible así en Earth Engine.
+producción (ver `descargar_imerg_nasa_directo.py`), porque la corrida
+Final de IMERG tiene ~3.5 meses de rezago y solo está disponible así en
+Earth Engine. Ambos scripts producen la misma salida (columnas ID_slope,
+time, precip_mm), intercambiable en el buffer de lluvia.
 
 Requiere una cuenta de servicio de Google Earth Engine (ver
 config/config.example.py) con la Earth Engine API habilitada en el

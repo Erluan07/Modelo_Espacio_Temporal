@@ -31,8 +31,8 @@ GEE_PROJECT_ID = os.environ.get("GEE_PROJECT_ID", "")
 # --- Rutas de datos internos de la empresa (ajustar a la infraestructura real) ---
 # Estas NO son credenciales, son rutas a las capas estáticas ya calculadas
 # (terreno, geología, cobertura, inventario) que el equipo de ISA mantiene.
-RUTA_SLOPES_SHP = os.environ.get("RUTA_SLOPES_SHP", "data/00_area_estudio/Slopes_Final.shp")
-RUTA_AOI_SHP = os.environ.get("RUTA_AOI_SHP", "data/00_area_estudio/Area_influencia.shp")
+RUTA_SLOPES_SHP = os.environ.get("RUTA_SLOPES_SHP", "ruta/a/shapefile_de_laderas.shp")
+RUTA_AOI_SHP = os.environ.get("RUTA_AOI_SHP", "ruta/a/area_influencia.shp")
 
 # --- Directorios de trabajo (buffer de lluvia, salidas) ---------------------
 DIR_BUFFER_LLUVIA = os.environ.get("DIR_BUFFER_LLUVIA", "data/buffer_lluvia_imerg")

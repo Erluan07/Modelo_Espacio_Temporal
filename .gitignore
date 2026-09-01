@@ -1,7 +1,6 @@
 # Credenciales -- NUNCA subir esto
 config/config.py
 *.json
-!config/*.example.json
 .env
 .netrc
 *credencial*

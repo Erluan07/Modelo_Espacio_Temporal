@@ -1,6 +1,10 @@
 """
 Descarga de precipitacion GPM IMERG (media hora) directamente desde NASA
-GES DISC, para un area de interes y rango de fechas.
+GES DISC, muestreada en los centroides de las laderas del área de estudio
+(MISMA convención de salida que descargar_imerg_gee_historico.py: columnas
+ID_slope, time, precip_mm -- así el resto del pipeline, en particular
+scripts/04_prediccion_operativa/predecir_diario.R, puede leer el buffer sin
+importar cuál de los dos scripts de descarga lo generó).
 
 ESTE es el script relevante para OPERACIÓN EN TIEMPO REAL (a diferencia de
 descargar_imerg_gee_historico.py, que usa la corrida Final vía Earth Engine
@@ -30,18 +34,21 @@ Autenticación (una de las dos, NUNCA credenciales en texto plano en el código)
      (guarda un token en ~/.netrc para las siguientes corridas -- no hay
      que volver a hacer login después de eso)
 
-Uso:
-  python descargar_imerg_nasa_directo.py --aoi ruta/al/area_estudio.shp \
-      --start 2026-01-01 --end 2026-01-01 --out data/buffer_lluvia_imerg
+Uso (corrida diaria típica, con retención de 31 días de buffer):
+  python descargar_imerg_nasa_directo.py --slopes ruta/al/laderas.shp \
+      --start 2026-01-01 --end 2026-01-01 --out data/buffer_lluvia_imerg \
+      --retener-dias 31
 """
 
 import argparse
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import earthaccess
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -53,19 +60,35 @@ MAX_REINTENTOS_GRANULO = 3
 ESPERA_REINTENTO_S = 5
 MAX_REINTENTOS_DIA = 2
 
+_log_file = None  # se abre en main(); ver log()
 
-def leer_bbox_aoi(aoi_path: str) -> tuple[float, float, float, float]:
-    gdf = gpd.read_file(aoi_path)
-    if gdf.crs is None:
-        raise ValueError(f"{aoi_path} no tiene CRS definido (falta .prj)")
-    gdf = gdf.to_crs(epsg=4326)
-    minx, miny, maxx, maxy = gdf.total_bounds
-    return (
-        minx - BBOX_PADDING_DEG,
-        miny - BBOX_PADDING_DEG,
-        maxx + BBOX_PADDING_DEG,
-        maxy + BBOX_PADDING_DEG,
-    )
+
+def log(msg: str) -> None:
+    """print() a consola Y a un archivo de log en disco -- REQUERIMIENTOS_TECNICOS.md
+    §7 asume que esta descarga deja registro persistente para poder monitorearla."""
+    print(msg)
+    if _log_file is not None:
+        _log_file.write(msg + "\n")
+        _log_file.flush()
+
+
+def leer_centroides_laderas(slopes_path: str) -> gpd.GeoDataFrame:
+    """Shapefile de laderas (columna ID_slope, entero) -> centroides en
+    lat/lon (EPSG:4326), para muestrear IMERG en el mismo punto que usa
+    descargar_imerg_gee_historico.py."""
+    slopes = gpd.read_file(slopes_path, encoding="latin1")
+    slopes["ID_slope"] = slopes["ID_slope"].astype(int)
+    # centroide en un CRS proyectado (evita el aviso/These de centroid en grados),
+    # igual patrón que el script de Earth Engine
+    cent = slopes.to_crs(3116).geometry.centroid.to_crs(4326)
+    return gpd.GeoDataFrame({"ID_slope": slopes["ID_slope"]},
+                             geometry=cent, crs="EPSG:4326")
+
+
+def calcular_bbox(centroides: gpd.GeoDataFrame) -> tuple[float, float, float, float]:
+    minx, miny, maxx, maxy = centroides.total_bounds
+    return (minx - BBOX_PADDING_DEG, miny - BBOX_PADDING_DEG,
+            maxx + BBOX_PADDING_DEG, maxy + BBOX_PADDING_DEG)
 
 
 def abrir_granulo(archivo) -> xr.Dataset:
@@ -79,26 +102,37 @@ def extraer_variable_precip(ds: xr.Dataset) -> str:
     raise KeyError(f"Ninguna variable de precipitacion conocida en el granulo: {list(ds.data_vars)}")
 
 
-def granulo_a_dataframe(ds: xr.Dataset, bbox: tuple[float, float, float, float]) -> pd.DataFrame:
-    minx, miny, maxx, maxy = bbox
+def granulo_a_dataframe(ds: xr.Dataset, centroides: gpd.GeoDataFrame) -> pd.DataFrame:
+    """Muestrea la media hora de este gránulo en cada centroide de ladera
+    (vecino más cercano -- la resolución nativa de IMERG, ~0.1°/~11km, es
+    mucho más gruesa que la separación típica entre laderas, así que varias
+    laderas comparten el mismo pixel de origen; esto es intencional y es el
+    mismo criterio que usa descargar_imerg_gee_historico.py vía Earth
+    Engine)."""
     var = extraer_variable_precip(ds)
+    tiempo = pd.to_datetime(ds["time"].values[0].isoformat()) if hasattr(ds["time"].values[0], "isoformat") \
+        else pd.to_datetime(str(ds["time"].values[0]))
 
-    sub = ds[[var]].sel(lon=slice(minx, maxx), lat=slice(miny, maxy))
-    if sub[var].size == 0:
-        return pd.DataFrame(columns=["time", "lat", "lon", "precip_mm"])
+    lon_da = xr.DataArray(centroides.geometry.x.to_numpy(), dims="ladera")
+    lat_da = xr.DataArray(centroides.geometry.y.to_numpy(), dims="ladera")
+    muestreado = ds[var].sel(lon=lon_da, lat=lat_da, method="nearest")
+    valores = np.asarray(muestreado.values).reshape(-1)
 
-    df = sub.to_dataframe().reset_index()
-    df = df.rename(columns={var: "precip_mm_hr"})
+    df = pd.DataFrame({
+        "ID_slope": centroides["ID_slope"].to_numpy(),
+        "time": tiempo,
+        "precip_mm_hr": valores,
+    })
     df = df[df["precip_mm_hr"] >= 0]  # descarta fill values (-9999.9)
     df["precip_mm"] = df["precip_mm_hr"] * 0.5  # tasa mm/h -> lamina acumulada en 30 min
-    df["time"] = pd.to_datetime(df["time"].apply(lambda t: t.isoformat()))
-    return df[["time", "lat", "lon", "precip_mm"]]
+    return df[["ID_slope", "time", "precip_mm"]]
 
 
-def procesar_dia(dia: datetime, bbox: tuple[float, float, float, float], out_dir: Path) -> None:
+def procesar_dia(dia: datetime, bbox: tuple[float, float, float, float],
+                  centroides: gpd.GeoDataFrame, out_dir: Path) -> None:
     out_file = out_dir / f"{dia:%Y%m%d}.parquet"
     if out_file.exists():
-        print(f"  [skip] {dia:%Y-%m-%d} ya existe")
+        log(f"  [skip] {dia:%Y-%m-%d} ya existe")
         return
 
     inicio = dia.strftime("%Y-%m-%d 00:00:00")
@@ -111,7 +145,7 @@ def procesar_dia(dia: datetime, bbox: tuple[float, float, float, float], out_dir
         bounding_box=bbox,
     )
     if not resultados:
-        print(f"  [warn] sin granulos para {dia:%Y-%m-%d} (¿aún no publicados? reintentar más tarde)")
+        log(f"  [warn] sin granulos para {dia:%Y-%m-%d} (¿aún no publicados? reintentar más tarde)")
         return
 
     archivos = earthaccess.open(resultados)
@@ -120,73 +154,110 @@ def procesar_dia(dia: datetime, bbox: tuple[float, float, float, float], out_dir
         for intento in range(1, MAX_REINTENTOS_GRANULO + 1):
             try:
                 ds = abrir_granulo(archivo)
-                partes.append(granulo_a_dataframe(ds, bbox))
+                partes.append(granulo_a_dataframe(ds, centroides))
                 ds.close()
                 break
             except Exception as e:
                 if intento == MAX_REINTENTOS_GRANULO:
-                    print(f"  [warn] {dia:%Y-%m-%d} granulo {i+1}/{len(resultados)} "
-                          f"fallo tras {MAX_REINTENTOS_GRANULO} intentos ({type(e).__name__}: {e}) -- se omite")
+                    log(f"  [warn] {dia:%Y-%m-%d} granulo {i+1}/{len(resultados)} "
+                        f"fallo tras {MAX_REINTENTOS_GRANULO} intentos ({type(e).__name__}: {e}) -- se omite")
                 else:
-                    print(f"  [retry] {dia:%Y-%m-%d} granulo {i+1}/{len(resultados)} "
-                          f"intento {intento} fallo, reintentando en {ESPERA_REINTENTO_S}s...")
+                    log(f"  [retry] {dia:%Y-%m-%d} granulo {i+1}/{len(resultados)} "
+                        f"intento {intento} fallo, reintentando en {ESPERA_REINTENTO_S}s...")
                     time.sleep(ESPERA_REINTENTO_S)
 
     if not partes:
-        print(f"  [warn] {dia:%Y-%m-%d} ningun granulo se pudo leer")
+        log(f"  [warn] {dia:%Y-%m-%d} ningun granulo se pudo leer")
         return
 
     df_dia = pd.concat(partes, ignore_index=True)
     if df_dia.empty:
-        print(f"  [warn] {dia:%Y-%m-%d} sin datos validos dentro del bbox")
+        log(f"  [warn] {dia:%Y-%m-%d} sin datos validos dentro del area")
         return
 
     out_dir.mkdir(parents=True, exist_ok=True)
     df_dia.to_parquet(out_file, index=False)
-    print(f"  [ok] {dia:%Y-%m-%d} -> {out_file.name} ({len(df_dia)} filas)")
+    log(f"  [ok] {dia:%Y-%m-%d} -> {out_file.name} ({len(df_dia)} filas, "
+        f"{df_dia['ID_slope'].nunique()} laderas)")
+
+
+def podar_buffer(out_dir: Path, dias_retener: int, dia_referencia: datetime) -> None:
+    """Borra del buffer los parquet diarios más viejos que `dias_retener`
+    días respecto a `dia_referencia` -- sin esto el buffer crece sin límite
+    (ver REQUERIMIENTOS_TECNICOS.md §4, que asume un buffer acotado a ~30
+    días)."""
+    limite = dia_referencia - timedelta(days=dias_retener)
+    borrados = 0
+    for f in out_dir.glob("[0-9]" * 8 + ".parquet"):
+        try:
+            fecha_archivo = datetime.strptime(f.stem, "%Y%m%d")
+        except ValueError:
+            continue
+        if fecha_archivo < limite:
+            f.unlink()
+            borrados += 1
+    if borrados:
+        log(f"\nPoda de buffer: {borrados} archivo(s) anteriores a {limite:%Y-%m-%d} eliminados "
+            f"(retención configurada: {dias_retener} días).")
 
 
 def main() -> None:
+    global _log_file
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--aoi", required=True, help="Shapefile del area de interes (cualquier CRS)")
+    ap.add_argument("--slopes", required=True,
+                     help="Shapefile de laderas (columna ID_slope) -- se descarga en sus centroides")
     ap.add_argument("--start", required=True, help="Fecha inicial YYYY-MM-DD")
     ap.add_argument("--end", required=True, help="Fecha final YYYY-MM-DD (incluida)")
-    ap.add_argument("--out", required=True, help="Carpeta de salida para los parquet diarios")
+    ap.add_argument("--out", required=True, help="Carpeta de salida (buffer de lluvia, un parquet por día)")
+    ap.add_argument("--retener-dias", type=int, default=None,
+                     help="Si se indica, borra del buffer los días más viejos que N respecto a --end "
+                          "(recomendado en producción, ej. 31, para no acumular el buffer indefinidamente)")
     args = ap.parse_args()
 
-    bbox = leer_bbox_aoi(args.aoi)
-    print(f"BBOX (lon_min, lat_min, lon_max, lat_max): {bbox}")
-    print(f"Corrida IMERG: {SHORT_NAME}")
-
-    earthaccess.login()
-
     out_dir = Path(args.out)
-    inicio = datetime.strptime(args.start, "%Y-%m-%d")
-    fin = datetime.strptime(args.end, "%Y-%m-%d")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _log_file = open(out_dir / f"log_descarga_{datetime.now():%Y%m%d_%H%M%S}.txt", "w", encoding="utf-8")
 
-    dias_fallidos = []
-    dia = inicio
-    while dia <= fin:
-        for intento in range(1, MAX_REINTENTOS_DIA + 1):
-            try:
-                procesar_dia(dia, bbox, out_dir)
-                break
-            except Exception as e:
-                if intento == MAX_REINTENTOS_DIA:
-                    print(f"  [ERROR] {dia:%Y-%m-%d} fallo por completo tras {MAX_REINTENTOS_DIA} intentos "
-                          f"({type(e).__name__}: {e}) -- se continua con el siguiente dia.")
-                    dias_fallidos.append(dia.strftime("%Y-%m-%d"))
-                else:
-                    print(f"  [retry] {dia:%Y-%m-%d} fallo el dia completo (intento {intento}), reintentando...")
-                    time.sleep(ESPERA_REINTENTO_S)
-        dia += timedelta(days=1)
+    try:
+        log("Cargando centroides de laderas...")
+        centroides = leer_centroides_laderas(args.slopes)
+        bbox = calcular_bbox(centroides)
+        log(f"  {len(centroides)} laderas | BBOX (lon_min, lat_min, lon_max, lat_max): {bbox}")
+        log(f"Corrida IMERG: {SHORT_NAME}")
 
-    if dias_fallidos:
-        print(f"\n{len(dias_fallidos)} dias quedaron sin descargar (fallo persistente): "
-              f"{', '.join(dias_fallidos)}")
-        print("Volver a correr el mismo comando para reintentarlos (los dias ya completos se saltan).")
-    else:
-        print("\nTodos los dias del rango se procesaron sin fallos persistentes.")
+        earthaccess.login()
+
+        inicio = datetime.strptime(args.start, "%Y-%m-%d")
+        fin = datetime.strptime(args.end, "%Y-%m-%d")
+
+        dias_fallidos = []
+        dia = inicio
+        while dia <= fin:
+            for intento in range(1, MAX_REINTENTOS_DIA + 1):
+                try:
+                    procesar_dia(dia, bbox, centroides, out_dir)
+                    break
+                except Exception as e:
+                    if intento == MAX_REINTENTOS_DIA:
+                        log(f"  [ERROR] {dia:%Y-%m-%d} fallo por completo tras {MAX_REINTENTOS_DIA} intentos "
+                            f"({type(e).__name__}: {e}) -- se continua con el siguiente dia.")
+                        dias_fallidos.append(dia.strftime("%Y-%m-%d"))
+                    else:
+                        log(f"  [retry] {dia:%Y-%m-%d} fallo el dia completo (intento {intento}), reintentando...")
+                        time.sleep(ESPERA_REINTENTO_S)
+            dia += timedelta(days=1)
+
+        if dias_fallidos:
+            log(f"\n{len(dias_fallidos)} dias quedaron sin descargar (fallo persistente): "
+                f"{', '.join(dias_fallidos)}")
+            log("Volver a correr el mismo comando para reintentarlos (los dias ya completos se saltan).")
+        else:
+            log("\nTodos los dias del rango se procesaron sin fallos persistentes.")
+
+        if args.retener_dias is not None:
+            podar_buffer(out_dir, args.retener_dias, fin)
+    finally:
+        _log_file.close()
 
 
 if __name__ == "__main__":

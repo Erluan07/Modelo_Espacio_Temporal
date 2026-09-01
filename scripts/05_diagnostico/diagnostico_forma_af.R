@@ -8,7 +8,7 @@
 ##
 ## Uso: Rscript diagnostico_forma_af.R
 
-suppressPackageStartupMessages({ library(refund); library(mgcv) })
+suppressPackageStartupMessages(library(refund))  # refund carga mgcv internamente
 dir_out <- "."
 PASOS <- 1440
 

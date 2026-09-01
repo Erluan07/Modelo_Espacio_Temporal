@@ -18,6 +18,15 @@ inventarios reales de la empresa (pueden ser más de dos si hay varias
 fases) -- ajustar a las rutas vigentes. SLOPES es el shapefile de laderas
 usado como grilla de referencia en todo el pipeline.
 
+IMPORTANTE -- este script es una herramienta de VERIFICACIÓN/CONTEO
+independiente (para ver cuántas presencias Planet hay por zona antes de
+construir la muestra completa), **no es un paso obligatorio de la tubería**:
+02_construir_muestra_base.py filtra el inventario por su cuenta y no lee el
+CSV que este script genera. Es normal (y esperado) correr solo 02 y 03
+directamente sin pasar por este script primero; úsenlo cuando quieran
+inspeccionar la cobertura del inventario antes de comprometerse a construir
+toda la muestra.
+
 Salida: inventario_fuente_por_slope_fecha.csv (ID_slope, fecha, Zona)
 
 Uso:
