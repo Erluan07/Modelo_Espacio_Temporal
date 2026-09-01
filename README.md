@@ -97,8 +97,3 @@ reentrene con inventario nuevo):
   usan aspecto lo separan en un indicador binario `aspect_flat_f` antes de
   aplicar el spline circular, para no tratarlo como si apuntara al norte.
 
-## Antes de usar esto operativamente
-
-Este modelo tiene limitaciones conocidas y documentadas honestamente en
-`LIMITACIONES.md`. Leerlo antes de tomar decisiones operativas con las
-predicciones de este modelo.
