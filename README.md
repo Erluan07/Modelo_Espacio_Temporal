@@ -15,8 +15,7 @@ ladera/píxel a partir de:
 Las presencias de entrenamiento se restringieron a eventos del inventario
 con **Fuente = Planetscope/Planet Scope** (fecha real, revisita casi
 diaria) — se excluyó explícitamente Google Earth Pro porque su fecha es la
-de la foto histórica más cercana, no la fecha real del evento (ver
-`LIMITACIONES.md`).
+de la foto histórica más cercana, no la fecha real del evento.
 
 ## Estructura del repo
 
@@ -31,12 +30,11 @@ scripts/
   03_ajuste_modelo/          Ajuste del FGAM (R, refund::pfr)
   04_prediccion_operativa/   Script de predicción DIARIA (el que va en el cron)
   05_diagnostico/            Prueba de sensibilidad del término de lluvia
-                              a la forma de la curva (ver LIMITACIONES.md)
+                              a la forma de la curva
 config/
   config.example.py          Plantilla de credenciales -- copiar a config.py
                               (NUNCA subir config.py con datos reales)
 REQUERIMIENTOS_TECNICOS.md   Qué se necesita para desplegar esto en producción
-LIMITACIONES.md              Lo que hay que saber antes de confiar en el modelo
 ```
 
 ## Prerrequisito externo (leer antes de empezar)
@@ -92,9 +90,8 @@ reentrene con inventario nuevo):
 
 4. Mantener el buffer de lluvia actualizado con
    `01_descarga_lluvia/descargar_imerg_nasa_directo.py` (corrida Early o
-   Late — **leer la nota sobre esto en el propio script y en
-   `LIMITACIONES.md`**; el script incluye `--retener-dias` para podar el
-   buffer automáticamente).
+   Late — **leer la nota sobre esto en el propio script**; el script incluye
+   `--retener-dias` para podar el buffer automáticamente).
 5. Correr `04_prediccion_operativa/predecir_diario.R` todos los días.
 
 ## Diccionario de datos de entrada
