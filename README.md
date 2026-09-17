@@ -50,6 +50,22 @@ de sesgo espacial) que **no forma parte de este repo** — si su equipo no la
 tiene todavía, hay que construirla primero. Sin ella, `02_construir_muestra_base.py`
 falla al arrancar.
 
+## Modelo ya entrenado (opcional, para no reentrenar)
+
+Si no necesitan reentrenar con inventario propio, el modelo ya ajustado
+(`modelo_espaciotemporal.rds`, ~478 MB) está disponible como adjunto en la
+sección **Releases** de este repo (no está en el árbol de git -- GitHub
+bloquea archivos de más de 100 MB en un push normal). Descárguenlo desde
+ahí y colóquenlo en la ruta que apunte `RUTA_MODELO` en
+`04_prediccion_operativa/predecir_diario.R` (por defecto
+`ruta/a/modelo_espaciotemporal.rds`).
+
+Es el modelo FGAM final: ventana de lluvia de 30 días, entrenado solo con
+presencias Fuente=Planetscope de 2024-2025, las 6 zonas actuales. Con esto
+alcanza para correr directamente `04_prediccion_operativa/predecir_diario.R`
+sin pasar por el paso 3 (ajuste) del flujo de abajo -- solo necesitan
+`terreno_por_ladera.csv` (paso 2.4) y el buffer de lluvia actualizado (paso 4).
+
 ## Flujo de trabajo (de cero a predicción)
 
 **Entrenamiento / construcción del modelo** (una vez, y cada vez que se
