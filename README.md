@@ -28,9 +28,13 @@ scripts/
   02_construccion_muestra/   Presencia/ausencia por píxel + ventanas de 30d
                               + terreno por ladera (ver orden abajo)
   03_ajuste_modelo/          Ajuste del FGAM (R, refund::pfr)
-  04_prediccion_operativa/   Script de predicción DIARIA (el que va en el cron)
+  04_prediccion_operativa/   Predicción DIARIA (el que va en el cron): probabilidad,
+                              aporte de la lluvia y clase de amenaza; amenaza
+                              confirmada (moda de 5 días)
   05_diagnostico/            Prueba de sensibilidad del término de lluvia
                               a la forma de la curva
+data_referencia/             lluvia_tipica_2024_por_ladera.csv (insumo de la
+                              clasificación de la amenaza; ya calculado)
 config/
   config.example.py          Plantilla de credenciales -- copiar a config.py
                               (NUNCA subir config.py con datos reales)
@@ -51,10 +55,11 @@ falla al arrancar.
 ## Modelo ya entrenado (opcional, para no reentrenar)
 
 Si no necesitan reentrenar con inventario propio, el modelo ya ajustado
-(`modelo_espaciotemporal.rds`, ~478 MB) está disponible como adjunto en la
-sección **Releases** de este repo (no está en el árbol de git -- GitHub
-bloquea archivos de más de 100 MB en un push normal). Descárguenlo desde
-ahí y colóquenlo en la ruta que apunte `RUTA_MODELO` en
+(`modelo_espaciotemporal.rds`, ~478 MB) se distribuye como archivo aparte: no
+está en el árbol de git (GitHub bloquea archivos de más de 100 MB en un push
+normal). Si en la sección **Releases** de este repo hay un adjunto,
+descárguenlo de ahí; si no, pídanselo al equipo del modelo. Colóquenlo en la
+ruta que apunte `RUTA_MODELO` en
 `04_prediccion_operativa/predecir_diario.R` (por defecto
 `ruta/a/modelo_espaciotemporal.rds`).
 
@@ -92,7 +97,81 @@ reentrene con inventario nuevo):
    `01_descarga_lluvia/descargar_imerg_nasa_directo.py` (corrida Early o
    Late — **leer la nota sobre esto en el propio script**; el script incluye
    `--retener-dias` para podar el buffer automáticamente).
-5. Correr `04_prediccion_operativa/predecir_diario.R` todos los días.
+5. Correr `04_prediccion_operativa/predecir_diario.R` todos los días. Además de
+   la probabilidad, deja el aporte de la lluvia (`delta`) y la clase de amenaza
+   del día.
+6. Correr `04_prediccion_operativa/amenaza_confirmada.R` justo después: calcula
+   la amenaza confirmada (moda de los últimos 5 días). Ver la sección siguiente.
+
+## Clasificación de la amenaza (cómo se pasa de la probabilidad a una categoría)
+
+`predecir_diario.R` entrega por ladera y día la `probabilidad` (P_ST, entre 0
+y 1). Es una probabilidad **relativa**: el modelo se entrenó con 1 presencia
+por cada 7 ausencias, así que sirve para ordenar laderas y días, no como
+probabilidad real de ocurrencia. Depende del terreno, de la época del año y
+de la lluvia acumulada de 30 días.
+
+La categoría de amenaza **no se saca de la P_ST directamente**, sino del
+**aporte de la lluvia (Δ)**: cuánto sube la probabilidad por la lluvia
+reciente frente a una lluvia típica de esa misma ladera.
+
+```
+Δ = logit(P_ST) − logit(P_base)        logit(p) = ln( p / (1 − p) )
+```
+
+- **P_ST**: la salida del modelo con la lluvia observada de los últimos 30 días.
+- **P_base**: la misma ladera, el mismo modelo y el mismo día del año, pero
+  con una curva de lluvia "típica": una rampa acumulada igual a la lluvia
+  media por paso de 30 min de esa ladera en 2024 por k, con k = 1…1440. Esa
+  lluvia media está en `data_referencia/lluvia_tipica_2024_por_ladera.csv`
+  (ya calculada para las 2.341 laderas; si cambian las laderas o el año de
+  referencia se regenera con `calcular_lluvia_tipica.py`).
+- Antes del logit, las probabilidades se recortan a [1e-6, 1 − 1e-6].
+
+**Clase de amenaza del día** (cortes fijos sobre Δ, en `CORTES_DELTA`):
+
+| Clase | Δ | Equivale a multiplicar los odds de la ladera por |
+|---|---|---|
+| baja | menor a 1,5 | menos de 4,5 |
+| media | de 1,5 a 2,5 | 4,5 a 12 |
+| alta | de 2,5 a 3,2 | 12 a 25 |
+| muy alta | 3,2 o más | más de 25 |
+
+**Amenaza confirmada**: es la moda de la clase de amenaza del día y de los 4
+días anteriores (5 en total); si hay empate gana la clase más alta. Es la que
+debe entrar a la regla de la consola — no la clase de un solo día. La calcula
+`amenaza_confirmada.R`, que lee los `prediccion_AAAAMMDD.csv` de
+`DIR_SALIDA` y escribe `amenaza_confirmada_AAAAMMDD.csv` (`clase_confirmada`,
+`clase_confirmada_num` 0-3 y `n_dias`, los días con dato dentro de la ventana).
+
+Cómo correrlo:
+
+```
+Rscript scripts/04_prediccion_operativa/predecir_diario.R 2026-11-05
+Rscript scripts/04_prediccion_operativa/amenaza_confirmada.R 2026-11-05
+```
+
+Hay que fijar las rutas de `DIR_SALIDA` (y las demás) dentro de cada script;
+`config.py` no las lee. Ejecutar `amenaza_confirmada.R` solo después de que
+exista la predicción del día pedido.
+
+Salida de `predecir_diario.R` (`prediccion_AAAAMMDD.csv`): `fecha, ID_slope,
+x_m, y_m, probabilidad, p_base, delta, clase_num, clase_amenaza`.
+
+**Advertencias**
+- Los cortes 1,5 / 2,5 / 3,2 se calibraron con IMERG y con una versión del
+  modelo entrenada solo con 2024; el modelo actual (2024-2025) puede
+  desplazar un poco la distribución de Δ. Revisen qué porcentaje de
+  ladera-días cae en cada clase antes de usarlos en producción (en la prueba,
+  alta + muy alta fue cerca del 1,7 % de los torre-días). Además son cortes
+  ilustrativos: no están calibrados contra la tasa real de movimientos.
+- Usar lluvia **observada**. Con lluvia pronosticada (ECMWF), Δ concuerda poco
+  con el calculado con lluvia observada (correlación ≈ 0,3).
+- Una ladera sin lluvia típica en el CSV (ID_slope nuevo) queda con `p_base`,
+  `delta` y clase en NA.
+- La probabilidad `probabilidad` también puede leerse en 4 rangos
+  (0,10 / 0,25 / 0,50) como segunda lectura, pero refleja sobre todo el
+  terreno y la época, no la lluvia reciente; no reemplaza a Δ.
 
 ## Diccionario de datos de entrada
 

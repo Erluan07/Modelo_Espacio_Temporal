@@ -14,6 +14,10 @@
 ##
 ## Uso: Rscript predecir_diario.R [YYYY-MM-DD]
 ##      (sin argumento, usa la fecha de hoy)
+##
+## Salida (prediccion_AAAAMMDD.csv): probabilidad (P_ST), p_base, delta (aporte de
+## la lluvia) y clase_amenaza del día (baja/media/alta/muy alta). La amenaza
+## "confirmada" (moda de los últimos 5 días) la calcula amenaza_confirmada.R.
 ## ===========================================================================
 
 suppressPackageStartupMessages(library(refund))
@@ -23,6 +27,12 @@ DIR_BUFFER_LLUVIA <- "ruta/a/data/buffer_lluvia_imerg"      # parquets/csv de 01
 RUTA_TERRENO <- "ruta/a/terreno_por_ladera.csv"              # x_m, y_m, ID_slope, slope, aspect, geologia, cobertura
 RUTA_MODELO <- "ruta/a/modelo_espaciotemporal.rds"
 DIR_SALIDA <- "ruta/a/data/predicciones"
+RUTA_LLUVIA_TIPICA <- "data_referencia/lluvia_tipica_2024_por_ladera.csv"  # viene en el repo (ver README, "Clasificación de la amenaza")
+
+## Cortes de la clase de amenaza (sobre el aporte de la lluvia Δ, en logit). Son los
+## de la consola; ver README. baja < 1.5 <= media < 2.5 <= alta < 3.2 <= muy alta
+CORTES_DELTA <- c(1.5, 2.5, 3.2)
+NOMBRES_CLASE <- c("baja", "media", "alta", "muy alta")
 
 PASOS <- 1440  # 30 dias x 48 medias horas
 
@@ -130,12 +140,37 @@ nd$doy <- as.numeric(format(FECHA, "%j"))
 
 pred <- as.numeric(predict(modelo, newdata = nd, type = "response"))
 
-salida <- data.frame(fecha = FECHA, ID_slope = nd$ID_slope, x_m = nd$x_m, y_m = nd$y_m, probabilidad = pred)
+## --- 5. P_base, aporte de la lluvia (Δ) y clase de amenaza del día ---
+## P_base = misma ladera, mismo modelo, mismo día del año, pero con la curva de lluvia
+## "típica": rampa acumulada = (lluvia media por paso de 30 min de la ladera en 2024) x k,
+## k = 1..1440. Δ = logit(P_ST) - logit(P_base): cuánto sube la probabilidad por la lluvia
+## reciente respecto a lo habitual en esa ladera.
+logit <- function(p) { p <- pmin(pmax(p, 1e-6), 1 - 1e-6); log(p / (1 - p)) }
+lt <- read.csv(RUTA_LLUVIA_TIPICA, stringsAsFactors = FALSE)
+media_paso <- lt$media_paso_mm[match(nd$ID_slope, lt$ID_slope)]
+p_base <- rep(NA_real_, nrow(nd))
+con_tipica <- !is.na(media_paso)
+if (any(!con_tipica)) {
+  cat("AVISO:", sum(!con_tipica), "laderas sin lluvia típica en", RUTA_LLUVIA_TIPICA,
+      "-- se les deja p_base, delta y clase en NA.\n")
+}
+if (any(con_tipica)) {
+  nd_base <- nd[con_tipica, ]
+  nd_base$precip_imerg <- I(outer(media_paso[con_tipica], seq_len(PASOS)))
+  p_base[con_tipica] <- as.numeric(predict(modelo, newdata = nd_base, type = "response"))
+}
+delta <- logit(pred) - logit(p_base)
+clase_num <- findInterval(delta, CORTES_DELTA)     # 0 = baja, 1 = media, 2 = alta, 3 = muy alta
+clase_amenaza <- NOMBRES_CLASE[clase_num + 1L]
+
+salida <- data.frame(fecha = FECHA, ID_slope = nd$ID_slope, x_m = nd$x_m, y_m = nd$y_m, probabilidad = pred,
+                     p_base = p_base, delta = delta, clase_num = clase_num, clase_amenaza = clase_amenaza)
 out_file <- file.path(DIR_SALIDA, paste0("prediccion_", format(FECHA, "%Y%m%d"), ".csv"))
 write.csv(salida, out_file, row.names = FALSE)
 
 cat("\nPredichas", nrow(salida), "de", nrow(zt), "laderas -- probabilidad media:",
     round(mean(pred), 4), ", máxima:", round(max(pred), 4), "\n")
+cat("Clases del día (ladera-días):", paste(NOMBRES_CLASE, table(factor(clase_num, levels = 0:3)), sep = " = ", collapse = ", "), "\n")
 cat("Guardado:", out_file, "\n")
 cat("\nFin:", format(Sys.time()), "\n")
 sink(); close(log_con)

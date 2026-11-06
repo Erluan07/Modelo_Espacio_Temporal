@@ -23,6 +23,10 @@ data/
 *.rds
 *.gdb/
 
+# Excepción: tabla pequeña de referencia que SÍ va en el repo
+!data_referencia/
+!data_referencia/lluvia_tipica_2024_por_ladera.csv
+
 # Logs de corridas
 log_*.txt
 *.log
