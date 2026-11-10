@@ -1,5 +1,6 @@
 # Credenciales -- NUNCA subir esto
 config/config.py
+config/gee.yaml
 *.json
 .env
 .netrc
