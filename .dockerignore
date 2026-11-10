@@ -1,0 +1,4 @@
+# La imagen solo necesita requirements.txt y docker/ -- el resto se monta.
+*
+!requirements.txt
+!docker/

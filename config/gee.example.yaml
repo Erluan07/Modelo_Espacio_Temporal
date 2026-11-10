@@ -1,0 +1,3 @@
+# Copia este archivo como  config/gee.yaml  y pon tus datos (gee.yaml no se sube al repo).
+project: "TU-CLOUD-PROJECT"                      # Cloud Project registrado en Earth Engine
+service_account_key: "gee_service_account.json"  # llave JSON en esta carpeta (config/)
