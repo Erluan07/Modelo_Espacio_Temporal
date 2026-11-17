@@ -31,6 +31,8 @@ scripts/
   04_prediccion_operativa/   Predicción DIARIA (el que va en el cron): probabilidad,
                               aporte de la lluvia y clase de amenaza; amenaza
                               confirmada (moda de 5 días)
+                              (nivel_y_accion_consola.py: de la amenaza confirmada
+                              al nivel y la acción de la consola)
   05_diagnostico/            Prueba de sensibilidad del término de lluvia
                               a la forma de la curva
 data_referencia/             lluvia_tipica_2024_por_ladera.csv (insumo de la
@@ -172,6 +174,51 @@ x_m, y_m, probabilidad, p_base, delta, clase_num, clase_amenaza`.
 - La probabilidad `probabilidad` también puede leerse en 4 rangos
   (0,10 / 0,25 / 0,50) como segunda lectura, pero refleja sobre todo el
   terreno y la época, no la lluvia reciente; no reemplaza a Δ.
+
+## De la amenaza confirmada al nivel y a la acción de la consola
+
+`scripts/04_prediccion_operativa/nivel_y_accion_consola.py` (Python, sin
+dependencias) muestra cómo la consola pasa de la amenaza al nivel y a la
+acción, por torre y por día. Son cuatro pasos:
+
+1. **Amenaza del día (0 a 3)**: `amenaza(delta)` cuenta cuántos cortes
+   (1,5 / 2,5 / 3,2) alcanza Δ. Es la `clase_num` de `predecir_diario.R`.
+2. **Amenaza confirmada**: `moda(ultimos_5)` toma la moda de los 5 días hasta
+   ayer. Los días sin dato no cuentan; con menos de 3 días válidos no hay
+   confirmación y el nivel queda en 0. Si hay empate gana la clase más alta.
+   Es `clase_confirmada_num` de `amenaza_confirmada.R`.
+3. **Nivel (1 a 5; 0 = sin dato)**: `nivel(confirmada, D, max_180d, criticidad)`
+   cruza la amenaza confirmada (filas) con la prospección del mes D (columnas,
+   D de 1 a 5 pasa a clase 0-3) en una matriz 4×4. Si en los últimos 180 días
+   la amenaza máxima fue alta o más y el nivel resultó 1 o 2, sube 1. El nivel
+   5 solo se da en líneas de criticidad A o B; en las demás queda en 4.
+4. **Acción**: `accion(nivel, dias4, dias5, alerta_temprana)` sale del nivel
+   (Sin acción, Monitoreo, Atención focalizada, Verificación prioritaria).
+   Siete días seguidos en nivel 4 o más dan "Confirmar intervención
+   inmediata", y siete en nivel 5, "Confirmar emergencia". `racha(niveles,
+   umbral)` cuenta esos días seguidos. Nivel 0 es "Completar información".
+
+Ejemplo (lo que imprime el script al ejecutarlo):
+
+```python
+amen_5d = [amenaza(d) for d in (2.7, 3.4, 3.3, 1.6, 3.5)]   # [2, 3, 3, 1, 3]
+conf = moda(amen_5d)                                        # 3 (muy alta)
+niv = nivel(conf, D=4, max_180d=3, criticidad="A")          # 4
+accion(niv, dias4=racha([4] * 7, 4), dias5=0)               # "Confirmar intervención inmediata"
+```
+
+Cada torre necesita: Δ de los últimos 5 días, D del mes, amenaza máxima de
+los últimos 180 días, criticidad de la línea y el historial de niveles para
+las rachas.
+
+Si se usa la versión sin el modelo espacio-temporal, solo cambia el paso 1: la
+amenaza diaria sale de comparar el pronóstico del IDEAM con sus umbrales
+(0 a 3) y el resto es igual.
+
+**Nota**: la matriz, el ajuste por historia, la regla del nivel 5 y los siete
+días de persistencia corresponden a la regla de la consola en su versión de
+trabajo (borrador); si la consola cambia esos valores, hay que actualizarlos en
+este script.
 
 ## Diccionario de datos de entrada
 
